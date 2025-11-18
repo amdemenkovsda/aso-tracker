@@ -74,6 +74,132 @@ NON_GAMING_CATEGORY_IDS: Dict[int, str] = {
     6027: "Magazines & Newspapers",
 }
 
+# Мультипликаторы трафика по категориям (относительно базовой категории)
+CATEGORY_TRAFFIC_MULTIPLIER: Dict[int, float] = {
+    6000: 1.5,   # Business
+    6001: 0.4,   # Weather
+    6002: 1.0,   # Utilities
+    6003: 1.2,   # Travel
+    6004: 1.0,   # Sports
+    6005: 1.3,   # Social Networking
+    6006: 0.7,   # Reference
+    6007: 1.4,   # Productivity
+    6008: 4.0,   # Photo & Video
+    6009: 1.1,   # News
+    6010: 1.0,   # Navigation
+    6011: 3.0,   # Music
+    6012: 1.2,   # Lifestyle
+    6013: 2.0,   # Health & Fitness
+    6015: 1.5,   # Finance
+    6016: 2.5,   # Entertainment
+    6017: 1.3,   # Education
+    6018: 0.8,   # Books
+    6020: 0.5,   # Medical
+    6023: 0.2,   # Catalogs
+    6024: 1.0,   # Food & Drink
+    6026: 0.7,   # Kids
+    6027: 0.6,   # Magazines & Newspapers
+}
+
+# Базовая выручка категории в день (USD) - для расчета коэффициентов
+BASE_DAILY_INSTALLS = 100000  # Базовое количество установок для категории
+
+# Модель монетизации (средние значения для top-grossing приложений)
+REVENUE_MODEL = {
+    "trial_conversion": 0.07,      # 7% пользователей начинают триал
+    "trial_to_pay": 0.40,           # 40% переходят в платных
+    "net_monthly_arpu": 12,         # $12 средний чек в месяц
+    "ltv_multiplier": 7.0,          # LTV = 7 месяцев среднее удержание
+}
+
+# Кривая трафика по позициям (% от общего трафика категории)
+def get_traffic_curve_coefficient(rank: int) -> float:
+    """
+    Возвращает коэффициент трафика в зависимости от позиции в топе.
+    Использует бета-кривую распределения, похожую на реальную.
+    """
+    if rank == 1:
+        return 0.10  # 10% трафика категории
+    elif rank <= 5:
+        return 0.06  # 6%
+    elif rank <= 10:
+        return 0.035  # 3.5%
+    elif rank <= 20:
+        return 0.020  # 2%
+    elif rank <= 50:
+        return 0.016  # 1.6%
+    elif rank <= 100:
+        return 0.012  # 1.2%
+    else:
+        return 0.005  # 0.5%
+
+
+def estimate_daily_installs(rank: int, category_id: int) -> tuple[int, int]:
+    """
+    Оценивает диапазон ежедневных установок на основе позиции и категории.
+    Возвращает (min_installs, max_installs).
+    """
+    traffic_coef = get_traffic_curve_coefficient(rank)
+    category_mult = CATEGORY_TRAFFIC_MULTIPLIER.get(category_id, 1.0)
+    
+    base_installs = BASE_DAILY_INSTALLS * traffic_coef * category_mult
+    
+    # Добавляем погрешность ±30%
+    min_installs = int(base_installs * 0.7)
+    max_installs = int(base_installs * 1.3)
+    
+    return min_installs, max_installs
+
+
+def estimate_monthly_revenue(daily_installs_avg: int) -> tuple[int, int]:
+    """
+    Оценивает месячную выручку на основе среднего количества установок в день.
+    Возвращает (min_revenue, max_revenue) в USD.
+    """
+    # Базовый расчет
+    paying_users = (
+        daily_installs_avg 
+        * REVENUE_MODEL["trial_conversion"] 
+        * REVENUE_MODEL["trial_to_pay"]
+    )
+    
+    monthly_revenue = (
+        paying_users 
+        * REVENUE_MODEL["net_monthly_arpu"] 
+        * 30  # дней в месяце
+    )
+    
+    # Добавляем погрешность ±40% (монетизация варьируется сильнее)
+    min_revenue = int(monthly_revenue * 0.6)
+    max_revenue = int(monthly_revenue * 1.4)
+    
+    return min_revenue, max_revenue
+
+
+def calculate_position_change_impact(rank_from: Optional[int], rank_to: int) -> dict:
+    """
+    Рассчитывает влияние изменения позиции на метрики.
+    """
+    if rank_from is None:
+        return {
+            "change_percent": None,
+            "traffic_impact": "NEW entry",
+        }
+    
+    traffic_from = get_traffic_curve_coefficient(rank_from)
+    traffic_to = get_traffic_curve_coefficient(rank_to)
+    
+    if traffic_from > 0:
+        change_percent = ((traffic_to - traffic_from) / traffic_from) * 100
+    else:
+        change_percent = 0
+    
+    return {
+        "change_percent": round(change_percent, 1),
+        "traffic_impact": f"{'↑' if change_percent > 0 else '↓'}{abs(change_percent):.1f}% traffic",
+    }
+
+
 # список user-agent'ов, чтобы не светиться одним и тем же
 USER_AGENTS: List[str] = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -375,6 +501,7 @@ def index(
     to_date: Optional[str] = Query(None),
     sort_by: Optional[str] = Query(None),
     only_new: Optional[str] = Query(None),
+    recent_days: Optional[str] = Query(None),
     user: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -412,6 +539,7 @@ def index(
                 "to_date": None,
                 "sort_by": None,
                 "only_new": None,
+                "recent_days": None,
             },
         )
 
@@ -486,6 +614,7 @@ def index(
                 "bundle_id": app.bundle_id,
                 "store_url": app.store_url,
                 "category_name": snap.category_name,
+                "category_id": snap.category_id,
                 "release_date": app.release_date,
                 "pos_from": None,
                 "pos_to": None,
@@ -517,6 +646,14 @@ def index(
             else:
                 status = "="
 
+        # Рассчитываем аналитику
+        category_id = d.get("category_id")
+        min_installs, max_installs = estimate_daily_installs(today_pos, category_id)
+        avg_installs = (min_installs + max_installs) // 2
+        min_revenue, max_revenue = estimate_monthly_revenue(avg_installs)
+        
+        position_impact = calculate_position_change_impact(prev_pos, today_pos)
+
         rows.append(
             {
                 "name": d["name"],
@@ -528,6 +665,12 @@ def index(
                 "status": status,
                 "store_url": d["store_url"],
                 "release_date": d.get("release_date"),
+                # Аналитика
+                "est_installs_min": min_installs,
+                "est_installs_max": max_installs,
+                "est_revenue_min": min_revenue,
+                "est_revenue_max": max_revenue,
+                "traffic_impact": position_impact.get("traffic_impact"),
             }
         )
 
@@ -543,6 +686,21 @@ def index(
     if only_new == "true":
         rows = [r for r in rows if r["status"] == "NEW"]
 
+    # фильтр по недавно вышедшим приложениям
+    recent_days_int: Optional[int] = None
+    if recent_days not in (None, ""):
+        try:
+            recent_days_int = int(recent_days)
+        except ValueError:
+            recent_days_int = None
+    
+    if recent_days_int is not None:
+        cutoff_date = (datetime.date.today() - datetime.timedelta(days=recent_days_int)).isoformat()
+        rows = [
+            r for r in rows 
+            if r.get("release_date") and r["release_date"] >= cutoff_date
+        ]
+
     # сортируем
     if sort_by == "new":
         # NEW приложения вверху, затем по дельте (большие скачки), затем по позиции
@@ -557,6 +715,11 @@ def index(
             -(r["delta"] if r["delta"] is not None else -999),
             r["today_pos"]
         ))
+    elif sort_by == "release":
+        # Сортировка по дате релиза (новые вверху)
+        rows.sort(key=lambda r: (
+            r["release_date"] if r["release_date"] else "0000-00-00",  # Пустые даты вниз
+        ), reverse=True)
     else:
         # По умолчанию сортируем по текущей позиции
         rows.sort(key=lambda r: r["today_pos"])
@@ -577,6 +740,7 @@ def index(
             "to_date": to_dt.isoformat() if to_dt else None,
             "sort_by": sort_by,
             "only_new": only_new,
+            "recent_days": recent_days_int,
         },
     )
 

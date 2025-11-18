@@ -38,6 +38,19 @@
             border-color: #0275d8; 
         }
         .quick-filter.active:hover { background: #025aa5; }
+        .spinner {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+            font-size: 16px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #refresh-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -56,6 +69,9 @@
 
 <div class="badge">{{ chart_type }}</div>
 <div class="badge">country: {{ country }}</div>
+<div class="badge" style="background: #e7f3ff; color: #0275d8; cursor: help;" title="Estimates based on position, category traffic multipliers, and industry benchmarks">
+    📊 Analytics: Estimates
+</div>
 
 <form method="get" class="filters" id="filters-form">
     <label>
@@ -93,16 +109,21 @@
             <option value="">Position</option>
             <option value="new" {% if sort_by == "new" %}selected{% endif %}>NEW First</option>
             <option value="delta" {% if sort_by == "delta" %}selected{% endif %}>Biggest Jump</option>
+            <option value="release" {% if sort_by == "release" %}selected{% endif %}>🆕 Recent Release</option>
         </select>
     </label>
 
     <button type="submit">Apply</button>
     <button
         type="button"
+        id="refresh-btn"
         style="margin-left: 12px;"
-        onclick="window.location.href='/fetch-now?token=super_secret_token_change_me&amp;redirect=true'">
+        onclick="startRefresh()">
         Refresh now
     </button>
+    <span id="loading-indicator" style="display: none; margin-left: 10px; color: #0275d8; font-size: 13px;">
+        <span class="spinner">⟳</span> Parsing 23 categories... This may take 2-3 minutes
+    </span>
 </form>
 
 <div style="margin: 10px 0; font-size: 13px;">
@@ -110,14 +131,46 @@
     <button type="button" class="quick-filter {% if only_new == 'true' %}active{% endif %}" onclick="toggleOnlyNew()">
         {% if only_new == 'true' %}✓ {% endif %}Only NEW
     </button>
+    <button type="button" class="quick-filter {% if sort_by == 'release' %}active{% endif %}" onclick="setSortByRelease()">
+        {% if sort_by == 'release' %}✓ {% endif %}📅 Sort by Date
+    </button>
+    
+    <span style="margin: 0 5px;">|</span>
+    
     <button type="button" class="quick-filter" onclick="setMinJump(10)">Jump +10</button>
     <button type="button" class="quick-filter" onclick="setMinJump(20)">Jump +20</button>
     <button type="button" class="quick-filter" onclick="setMinJump(30)">Jump +30</button>
     <button type="button" class="quick-filter" onclick="setMinJump(50)">Jump +50</button>
     <button type="button" class="quick-filter" onclick="clearJump()">Clear Jump Filter</button>
+    
+    <span style="margin: 0 5px;">|</span>
+    
+    <button type="button" class="quick-filter {% if recent_days == 30 %}active{% endif %}" onclick="setRecentDays(30)">
+        {% if recent_days == 30 %}✓ {% endif %}🆕 Last 30 days
+    </button>
+    <button type="button" class="quick-filter {% if recent_days == 60 %}active{% endif %}" onclick="setRecentDays(60)">
+        {% if recent_days == 60 %}✓ {% endif %}Last 60 days
+    </button>
+    <button type="button" class="quick-filter {% if recent_days == 90 %}active{% endif %}" onclick="setRecentDays(90)">
+        {% if recent_days == 90 %}✓ {% endif %}Last 90 days
+    </button>
+    <button type="button" class="quick-filter" onclick="clearRecentDays()">Clear Date Filter</button>
 </div>
 
 <script>
+function startRefresh() {
+    const btn = document.getElementById('refresh-btn');
+    const indicator = document.getElementById('loading-indicator');
+    
+    // Показываем индикатор загрузки
+    btn.disabled = true;
+    btn.textContent = 'Parsing...';
+    indicator.style.display = 'inline';
+    
+    // Перенаправляем на endpoint парсинга
+    window.location.href = '/fetch-now?token=super_secret_token_change_me&redirect=true';
+}
+
 function toggleOnlyNew() {
     const url = new URL(window.location);
     if (url.searchParams.get('only_new') === 'true') {
@@ -140,6 +193,30 @@ function clearJump() {
     input.value = '';
     form.submit();
 }
+
+function setRecentDays(days) {
+    const url = new URL(window.location);
+    url.searchParams.set('recent_days', days);
+    window.location.href = url.toString();
+}
+
+function clearRecentDays() {
+    const url = new URL(window.location);
+    url.searchParams.delete('recent_days');
+    window.location.href = url.toString();
+}
+
+function setSortByRelease() {
+    const url = new URL(window.location);
+    if (url.searchParams.get('sort_by') === 'release') {
+        // Если уже активна сортировка по дате, отключаем её
+        url.searchParams.delete('sort_by');
+    } else {
+        // Включаем сортировку по дате релиза
+        url.searchParams.set('sort_by', 'release');
+    }
+    window.location.href = url.toString();
+}
 </script>
 
 <table>
@@ -152,6 +229,7 @@ function clearJump() {
         <th>Pos (today)</th>
         <th>Pos (prev)</th>
         <th>Δ / Status</th>
+        <th>📊 Analytics</th>
     </tr>
     </thead>
     <tbody>
@@ -182,6 +260,19 @@ function clearJump() {
                     <span class="status-out">{{ row.status }}</span>
                 {% else %}
                     <span class="status-neutral">{{ row.status }}</span>
+                {% endif %}
+            </td>
+            <td style="font-size: 11px;">
+                <div style="margin-bottom: 3px;">
+                    <strong>📥 {{ "{:,}".format(row.est_installs_min) }}–{{ "{:,}".format(row.est_installs_max) }}</strong> /day
+                </div>
+                <div style="color: #28a745; margin-bottom: 3px;">
+                    <strong>💰 ${{ "{:,}".format(row.est_revenue_min // 1000) }}k–${{ "{:,}".format(row.est_revenue_max // 1000) }}k</strong> /mo
+                </div>
+                {% if row.traffic_impact %}
+                <div style="color: #666; font-size: 10px;">
+                    {{ row.traffic_impact }}
+                </div>
                 {% endif %}
             </td>
         </tr>
