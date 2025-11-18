@@ -39,12 +39,11 @@ FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
 
 # задержки, чтобы не упираться в лимиты RSS
-REQUEST_RETRY_DELAY = float(os.getenv("REQUEST_RETRY_DELAY", "2"))  # базовая пауза между ретраями одного запроса
-REQUEST_MAX_ATTEMPTS = int(os.getenv("REQUEST_MAX_ATTEMPTS", "6"))  # сколько раз пытаемся сходить за RSS
-REQUEST_BACKOFF_MULTIPLIER = float(os.getenv("REQUEST_BACKOFF_MULTIPLIER", "1.5"))  # как растёт задержка между попытками
-REQUEST_JITTER_SECONDS = float(os.getenv("REQUEST_JITTER_SECONDS", "0.5"))  # случайный шум к задержке, чтобы не бомбить по расписанию
 CATEGORY_DELAY_SECONDS = float(os.getenv("CATEGORY_DELAY_SECONDS", "1"))  # пауза между категориями (сек)
-RETRYABLE_STATUS_CODES = {403, 429, 500, 502, 503, 504}
+
+PROXY_URL = "http://geonode_3mN8H3zK73-type-residential:bd124529-3520-4787-9a11-0a5bfa1134c1@us.proxy.geonode.io:9000"
+PROXIES = {"http": PROXY_URL, "https": PROXY_URL}
+RETRY_DELAYS = [1, 2, 4, 8, 10]
 
 # учётка для админ-доступа (можно переопределить через переменные окружения)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "aso")
@@ -175,51 +174,33 @@ def get_current_user(credentials: HTTPBasicCredentials = Depends(security)) -> s
 # Вспомогательные функции
 # --------------------------------------------------------------------
 
-request_session = requests.Session()
-
-
-def _sleep_with_backoff(attempt: int) -> None:
-    """
-    Засыпаем с экспоненциальным ростом задержки и небольшим шумом,
-    чтобы немного растянуть поток запросов.
-    """
-    delay = REQUEST_RETRY_DELAY * (REQUEST_BACKOFF_MULTIPLIER**attempt)
-    if REQUEST_JITTER_SECONDS > 0:
-        delay += random.uniform(0, REQUEST_JITTER_SECONDS)
-    if delay > 0:
-        time.sleep(delay)
-
 
 def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
     """
-    Делает GET-запрос с ротацией user-agent и ретраями без прокси.
-
-    Логика:
-    - количество попыток и задержки настраиваются через env;
-    - на каждой попытке случайный User-Agent;
-    - если сеть упала или получили код из списка RETRYABLE_STATUS_CODES —
-      ждём с экспоненциальным ростом паузы и пробуем ещё раз;
-    - для остальных HTTP-ошибок выкидываем исключение сразу.
+    Делает GET-запрос через резидентский прокси Geonode с ротацией user-agent.
+    При ответе 503 повторяем запросы c задержками 1,2,4,8,10 сек.
     """
     last_exc: Optional[Exception] = None
-    attempts = max(1, REQUEST_MAX_ATTEMPTS)
 
-    for attempt in range(attempts):
+    for attempt, delay in enumerate(RETRY_DELAYS):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "application/json,text/*;q=0.9,*/*;q=0.8",
         }
 
         try:
-            resp = request_session.get(url, headers=headers, timeout=timeout)
+            resp = requests.get(url, headers=headers, timeout=timeout, proxies=PROXIES)
         except requests.RequestException as e:
             last_exc = e
-            _sleep_with_backoff(attempt)
-            continue
-        if resp.status_code in RETRYABLE_STATUS_CODES:
-            last_exc = requests.HTTPError(f"{resp.status_code} from {url}")
-            _sleep_with_backoff(attempt)
-            continue
+            print(f"[FETCH ERROR] network failure for {url}: {e}")
+            break
+
+        if resp.status_code == 503:
+            last_exc = requests.HTTPError(f"503 from {url}")
+            if attempt < len(RETRY_DELAYS) - 1:
+                time.sleep(delay)
+                continue
+            break
 
         try:
             resp.raise_for_status()
@@ -230,6 +211,7 @@ def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
         return resp
 
     if last_exc is not None:
+        print(f"[FETCH ERROR] {url}: {last_exc}")
         raise last_exc
     raise RuntimeError("fetch_with_rotation: exhausted attempts without response")
 
