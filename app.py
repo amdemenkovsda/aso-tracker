@@ -212,10 +212,16 @@ USER_AGENTS: List[str] = [
 # БД / ORM
 # --------------------------------------------------------------------
 
-engine = create_engine(
-    DB_URL,
-    connect_args={"check_same_thread": False, "timeout": 30},
-)
+# Определяем параметры подключения в зависимости от типа БД
+if DB_URL.startswith("sqlite"):
+    engine = create_engine(
+        DB_URL,
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+else:
+    # Для PostgreSQL и других БД не используем SQLite-специфичные параметры
+    engine = create_engine(DB_URL)
+    
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
