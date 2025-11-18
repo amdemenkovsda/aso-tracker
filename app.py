@@ -40,9 +40,6 @@ FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в 
 
 # задержки, чтобы не упираться в лимиты RSS
 CATEGORY_DELAY_SECONDS = float(os.getenv("CATEGORY_DELAY_SECONDS", "1"))  # пауза между категориями (сек)
-
-PROXY_URL = "http://geonode_3mN8H3zK73-type-residential:bd124529-3520-4787-9a11-0a5bfa1134c1@us.proxy.geonode.io:9000"
-PROXIES = {"http": PROXY_URL, "https": PROXY_URL}
 RETRY_DELAYS = [1, 2, 4, 8, 10]
 
 # учётка для админ-доступа (можно переопределить через переменные окружения)
@@ -177,41 +174,37 @@ def get_current_user(credentials: HTTPBasicCredentials = Depends(security)) -> s
 
 def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
     """
-    Делает GET-запрос через резидентский прокси Geonode с ротацией user-agent.
-    При ответе 503 повторяем запросы c задержками 1,2,4,8,10 сек.
+    Делает GET-запрос к RSS API с ротацией user-agent и повторными попытками при временных ошибках.
     """
     last_exc: Optional[Exception] = None
+    attempts = len(RETRY_DELAYS)
 
-    for attempt, delay in enumerate(RETRY_DELAYS):
+    for attempt in range(attempts):
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "application/json,text/*;q=0.9,*/*;q=0.8",
         }
 
         try:
-            resp = requests.get(url, headers=headers, timeout=timeout, proxies=PROXIES)
+            resp = requests.get(url, headers=headers, timeout=timeout)
         except requests.RequestException as e:
             last_exc = e
             print(f"[FETCH ERROR] network failure for {url}: {e}")
-            break
+        else:
+            if resp.status_code == 503:
+                last_exc = requests.HTTPError(f"503 from {url}")
+            else:
+                try:
+                    resp.raise_for_status()
+                except requests.HTTPError as e:
+                    last_exc = e
+                else:
+                    return resp
 
-        if resp.status_code == 503:
-            last_exc = requests.HTTPError(f"503 from {url}")
-            if attempt < len(RETRY_DELAYS) - 1:
-                time.sleep(delay)
-                continue
-            break
-
-        try:
-            resp.raise_for_status()
-        except requests.HTTPError as e:
-            last_exc = e
-            break
-
-        return resp
+        if attempt < attempts - 1:
+            time.sleep(RETRY_DELAYS[attempt])
 
     if last_exc is not None:
-        print(f"[FETCH ERROR] {url}: {last_exc}")
         raise last_exc
     raise RuntimeError("fetch_with_rotation: exhausted attempts without response")
 
@@ -222,8 +215,8 @@ def fetch_category_rss(category_id: int) -> List[dict]:
     Забираем RSS топ‑гроссинга для конкретной категории.
     """
     url = (
-        f"https://rss.itunes.apple.com/api/v1/"
-        f"{COUNTRY}/ios-apps/{CHART_TYPE}/all/{LIMIT}/explicit.json"
+        f"https://rss.applemarketingtools.com/api/v2/"
+        f"{COUNTRY}/apps/{CHART_TYPE}/{LIMIT}/apps.json"
         f"?genre={category_id}"
     )
     resp = fetch_with_rotation(url, timeout=15)
