@@ -1,0 +1,14 @@
+# venv
+venv/
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# SQLite база (на сервере создадим заново)
+data.db
+
+# VSCode
+.vscode/

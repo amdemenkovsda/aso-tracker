@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Top Grossing Tracker</title>
+    <style>
+        body { font-family: -apple-system, system-ui, sans-serif; margin: 20px; }
+        h1 { margin-bottom: 0; }
+        .dates { color: #666; margin-bottom: 10px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; }
+        th { background: #f5f5f5; text-align: left; }
+        tr:nth-child(even) { background: #fafafa; }
+        .status-up { color: green; font-weight: 600; }
+        .status-down { color: #d9534f; font-weight: 600; }
+        .status-new { color: #0275d8; font-weight: 600; }
+        .status-out { color: #999; font-weight: 600; }
+        .status-neutral { color: #666; }
+        .bundle { font-family: monospace; font-size: 11px; color: #666; }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #eee; margin-right: 5px; }
+        form.filters { margin: 15px 0; font-size: 13px; }
+        form.filters label { margin-right: 12px; }
+        form.filters input[type="number"] { width: 80px; }
+        form.filters input[type="date"] { font-size: 12px; }
+    </style>
+</head>
+<body>
+<h1>App Store Top Grossing (US, non-gaming)</h1>
+
+<div class="dates">
+    {% if today %}
+        Comparing:
+        <strong>{{ compare_date if compare_date else "—" }}</strong>
+        &nbsp;→&nbsp;
+        <strong>{{ today }}</strong>
+    {% else %}
+        Нет данных. Вызови /fetch-now, чтобы подтянуть первый срез.
+    {% endif %}
+</div>
+
+<div class="badge">{{ chart_type }}</div>
+<div class="badge">country: {{ country }}</div>
+
+<form method="get" class="filters" id="filters-form">
+    <label>
+        Category:
+        <select name="category" onchange="document.getElementById('filters-form').submit()">
+            <option value="">All categories</option>
+            {% for cid, cname in categories %}
+                <option value="{{ cid }}" {% if selected_category == cid %}selected{% endif %}>{{ cname }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <label>
+        Min jump (positions):
+        <input type="number" name="min_jump"
+               value="{{ min_jump if min_jump is not none else '' }}"
+               onchange="document.getElementById('filters-form').submit()">
+    </label>
+
+    <label>
+        From:
+        <input type="date" name="from_date" value="{{ from_date or '' }}"
+               onchange="document.getElementById('filters-form').submit()">
+    </label>
+
+    <label>
+        To:
+        <input type="date" name="to_date" value="{{ to_date or '' }}"
+               onchange="document.getElementById('filters-form').submit()">
+    </label>
+
+    <button type="submit">Apply</button>
+    <button
+        type="button"
+        style="margin-left: 12px;"
+        onclick="window.location.href='/fetch-now?token=super_secret_token_change_me&amp;redirect=true'">
+        Refresh now
+    </button>
+</form>
+
+<table>
+    <thead>
+    <tr>
+        <th>App</th>
+        <th>Bundle ID</th>
+        <th>Category</th>
+        <th>Pos (today)</th>
+        <th>Pos (prev)</th>
+        <th>Δ / Status</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+        <tr>
+            <td>
+                {% if row.store_url %}
+                    <a href="{{ row.store_url }}" target="_blank" rel="noopener noreferrer">
+                        {{ row.name }}
+                    </a>
+                {% else %}
+                    {{ row.name }}
+                {% endif %}
+            </td>
+            <td class="bundle">{{ row.bundle_id }}</td>
+            <td>{{ row.category_name }}</td>
+            <td>{{ row.today_pos if row.today_pos is not none else "-" }}</td>
+            <td>{{ row.prev_pos if row.prev_pos is not none else "-" }}</td>
+            <td>
+                {% if row.status == "NEW" %}
+                    <span class="status-new">{{ row.status }}</span>
+                {% elif row.status.startswith("+") %}
+                    <span class="status-up">{{ row.status }}</span>
+                {% elif row.status.startswith("-") %}
+                    <span class="status-down">{{ row.status }}</span>
+                {% elif row.status.startswith("OUT") %}
+                    <span class="status-out">{{ row.status }}</span>
+                {% else %}
+                    <span class="status-neutral">{{ row.status }}</span>
+                {% endif %}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+</body>
+</html>
