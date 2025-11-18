@@ -34,7 +34,8 @@ DB_URL = "sqlite:///./data.db"
 COUNTRY = "us"
 CHART_TYPE = "top-grossing"
 LIMIT = 200
-FETCH_TOKEN = "super_secret_token_change_me"
+# токен для ручного обновления, можно переопределить через переменную окружения
+FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
 
 # учётка для админ-доступа (можно переопределить через переменные окружения)
