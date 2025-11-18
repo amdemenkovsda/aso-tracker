@@ -22,6 +22,16 @@
         form.filters label { margin-right: 12px; }
         form.filters input[type="number"] { width: 80px; }
         form.filters input[type="date"] { font-size: 12px; }
+        .quick-filter { 
+            padding: 4px 10px; 
+            margin-right: 5px; 
+            border: 1px solid #ddd; 
+            background: #f8f8f8; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-size: 12px;
+        }
+        .quick-filter:hover { background: #e8e8e8; }
     </style>
 </head>
 <body>
@@ -71,6 +81,15 @@
                onchange="document.getElementById('filters-form').submit()">
     </label>
 
+    <label>
+        Sort by:
+        <select name="sort_by" onchange="document.getElementById('filters-form').submit()">
+            <option value="">Position</option>
+            <option value="new" {% if sort_by == "new" %}selected{% endif %}>NEW First</option>
+            <option value="delta" {% if sort_by == "delta" %}selected{% endif %}>Biggest Jump</option>
+        </select>
+    </label>
+
     <button type="submit">Apply</button>
     <button
         type="button"
@@ -80,12 +99,37 @@
     </button>
 </form>
 
+<div style="margin: 10px 0; font-size: 13px;">
+    <strong>Quick filters:</strong>
+    <button type="button" class="quick-filter" onclick="setMinJump(10)">Jump +10</button>
+    <button type="button" class="quick-filter" onclick="setMinJump(20)">Jump +20</button>
+    <button type="button" class="quick-filter" onclick="setMinJump(30)">Jump +30</button>
+    <button type="button" class="quick-filter" onclick="setMinJump(50)">Jump +50</button>
+    <button type="button" class="quick-filter" onclick="clearJump()">Clear Jump Filter</button>
+</div>
+
+<script>
+function setMinJump(value) {
+    const form = document.getElementById('filters-form');
+    const input = form.querySelector('[name="min_jump"]');
+    input.value = value;
+    form.submit();
+}
+function clearJump() {
+    const form = document.getElementById('filters-form');
+    const input = form.querySelector('[name="min_jump"]');
+    input.value = '';
+    form.submit();
+}
+</script>
+
 <table>
     <thead>
     <tr>
         <th>App</th>
         <th>Bundle ID</th>
         <th>Category</th>
+        <th>Release Date</th>
         <th>Pos (today)</th>
         <th>Pos (prev)</th>
         <th>Δ / Status</th>
@@ -105,6 +149,7 @@
             </td>
             <td class="bundle">{{ row.bundle_id }}</td>
             <td>{{ row.category_name }}</td>
+            <td style="font-size: 12px; color: #666;">{{ row.release_date if row.release_date else "-" }}</td>
             <td>{{ row.today_pos if row.today_pos is not none else "-" }}</td>
             <td>{{ row.prev_pos if row.prev_pos is not none else "-" }}</td>
             <td>

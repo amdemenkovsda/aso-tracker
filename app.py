@@ -101,6 +101,7 @@ class AppModel(Base):
     bundle_id = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=False)
     store_url = Column(String, nullable=True)
+    release_date = Column(String, nullable=True)  # Дата релиза приложения
 
 
 class ChartSnapshot(Base):
@@ -232,6 +233,7 @@ def fetch_category_rss(category_id: int) -> List[dict]:
         id_data = entry.get("id")
         name_data = entry.get("im:name")
         link_data = entry.get("link")
+        release_data = entry.get("im:releaseDate")
         
         bundle_id = None
         if isinstance(id_data, dict):
@@ -246,6 +248,16 @@ def fetch_category_rss(category_id: int) -> List[dict]:
             store_url = link_data.get("attributes", {}).get("href")
         if not store_url and isinstance(id_data, dict):
             store_url = id_data.get("label")
+        
+        release_date = None
+        if isinstance(release_data, dict):
+            release_date_str = release_data.get("label")
+            if release_date_str:
+                # Форматируем дату из ISO формата в простой вид (YYYY-MM-DD)
+                try:
+                    release_date = release_date_str.split("T")[0]
+                except Exception:
+                    release_date = release_date_str
 
         # попробуем взять имя категории из фида, если оно есть
         cat_name = NON_GAMING_CATEGORY_IDS.get(category_id) or ""
@@ -262,6 +274,7 @@ def fetch_category_rss(category_id: int) -> List[dict]:
                 "store_url": store_url,
                 "category_id": category_id,
                 "category_name": cat_name or str(category_id),
+                "release_date": release_date,
             }
         )
 
@@ -305,9 +318,14 @@ def fetch_and_store_all(db: Session, snapshot_date: datetime.date) -> int:
                     bundle_id=entry["bundle_id"],
                     name=entry["name"],
                     store_url=entry.get("store_url"),
+                    release_date=entry.get("release_date"),
                 )
                 db.add(app)
                 db.flush()  # чтобы у app уже был id
+            else:
+                # Обновляем release_date если она пришла и еще не была установлена
+                if entry.get("release_date") and not app.release_date:
+                    app.release_date = entry.get("release_date")
 
             # Variant B: не трогаем старые дни, а для конкретной даты делаем upsert по ключу
             existing = (
@@ -352,10 +370,11 @@ def fetch_and_store_all(db: Session, snapshot_date: datetime.date) -> int:
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
-    category: Optional[int] = Query(None),
+    category: Optional[str] = Query(None),
     min_jump: Optional[str] = Query(None),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query(None),
     user: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -391,6 +410,7 @@ def index(
                 "min_jump": None,
                 "from_date": None,
                 "to_date": None,
+                "sort_by": None,
             },
         )
 
@@ -412,6 +432,14 @@ def index(
     # гарантируем, что from_dt не позже to_dt
     if from_dt > to_dt:
         from_dt, to_dt = to_dt, from_dt
+
+    # разбор category (может прийти пустой строкой при "All categories")
+    category_int: Optional[int] = None
+    if category not in (None, ""):
+        try:
+            category_int = int(category)
+        except ValueError:
+            category_int = None
 
     # разбор min_jump (может прийти пустой строкой)
     min_jump_int: Optional[int] = None
@@ -441,8 +469,8 @@ def index(
         )
     )
 
-    if category is not None:
-        snaps = snaps.filter(ChartSnapshot.category_id == category)
+    if category_int is not None:
+        snaps = snaps.filter(ChartSnapshot.category_id == category_int)
 
     snaps = snaps.all()
 
@@ -457,6 +485,7 @@ def index(
                 "bundle_id": app.bundle_id,
                 "store_url": app.store_url,
                 "category_name": snap.category_name,
+                "release_date": app.release_date,
                 "pos_from": None,
                 "pos_to": None,
             },
@@ -497,6 +526,7 @@ def index(
                 "delta": delta,
                 "status": status,
                 "store_url": d["store_url"],
+                "release_date": d.get("release_date"),
             }
         )
 
@@ -508,8 +538,23 @@ def index(
             if r.get("delta") is not None and r["delta"] >= min_jump_int
         ]
 
-    # сортируем по текущей позиции
-    rows.sort(key=lambda r: r["today_pos"])
+    # сортируем
+    if sort_by == "new":
+        # NEW приложения вверху, затем по дельте (большие скачки), затем по позиции
+        rows.sort(key=lambda r: (
+            0 if r["status"] == "NEW" else 1,
+            -(r["delta"] if r["delta"] is not None else -999),
+            r["today_pos"]
+        ))
+    elif sort_by == "delta":
+        # Сортировка по дельте (большие скачки вверху)
+        rows.sort(key=lambda r: (
+            -(r["delta"] if r["delta"] is not None else -999),
+            r["today_pos"]
+        ))
+    else:
+        # По умолчанию сортируем по текущей позиции
+        rows.sort(key=lambda r: r["today_pos"])
 
     return templates.TemplateResponse(
         "index.html",
@@ -521,10 +566,11 @@ def index(
             "chart_type": CHART_TYPE,
             "country": COUNTRY.upper(),
             "categories": categories,
-            "selected_category": category,
+            "selected_category": category_int,
             "min_jump": min_jump_int,
             "from_date": from_dt.isoformat() if from_dt else None,
             "to_date": to_dt.isoformat() if to_dt else None,
+            "sort_by": sort_by,
         },
     )
 
