@@ -3,7 +3,7 @@ import asyncio
 import os
 import random
 import secrets
-from itertools import cycle
+import time
 from typing import List, Optional, Dict, Generator
 
 import requests
@@ -37,6 +37,10 @@ LIMIT = 200
 # токен для ручного обновления, можно переопределить через переменную окружения
 FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
+
+# задержки, чтобы не упираться в лимиты RSS
+REQUEST_RETRY_DELAY = float(os.getenv("REQUEST_RETRY_DELAY", "2"))  # пауза между ретраями одного запроса (сек)
+CATEGORY_DELAY_SECONDS = float(os.getenv("CATEGORY_DELAY_SECONDS", "1"))  # пауза между категориями (сек)
 
 # учётка для админ-доступа (можно переопределить через переменные окружения)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "aso")
@@ -77,15 +81,6 @@ USER_AGENTS: List[str] = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
 ]
-
-# постоянный список прокси (HTTP)
-PROXY_URLS: List[str] = [
-    "http://aUxeJuPH:kR2qzVg8@142.252.171.69:64144",
-    "http://aUxeJuPH:kR2qzVg8@156.229.238.16:62440",
-    "http://aUxeJuPH:kR2qzVg8@142.252.140.110:64062",
-]
-
-PROXY_CYCLE = cycle(PROXY_URLS)
 
 # --------------------------------------------------------------------
 # БД / ORM
@@ -179,54 +174,37 @@ def get_current_user(credentials: HTTPBasicCredentials = Depends(security)) -> s
 
 def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
     """
-    Делает GET-запрос с ротацией user-agent и, при наличии, прокси.
+    Делает GET-запрос с ротацией user-agent и ретраями без прокси.
 
     Логика:
-    - первая попытка всегда идёт БЕЗ прокси (чистый твой IP);
-    - если на первой попытке получаем 503 (rate limit) или сетевую ошибку,
-      начинаем перебирать прокси из списка APPSTORE_PROXIES;
-    - для прокси: если получаем 503/403 или сетевую ошибку — пробуем следующий;
-      если получаем другой HTTP-статус с ошибкой — падаем.
+    - несколько попыток (по умолчанию 3);
+    - на каждой попытке случайный User-Agent;
+    - если сеть упала или получили 503/403 — подождать и попробовать ещё раз;
+    - для остальных HTTP-ошибок выкидываем исключение сразу.
     """
     last_exc: Optional[Exception] = None
-
-    # сколько попыток: 1 (без прокси) + N прокси
-    proxy_count = len(PROXY_URLS)
-    attempts = 1 + proxy_count
+    attempts = 3
 
     for attempt in range(attempts):
-        # выбираем user-agent
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "application/json,text/*;q=0.9,*/*;q=0.8",
         }
 
-        # первая попытка — без прокси
-        proxies = None
-        using_proxy = False
-        if attempt > 0 and PROXY_CYCLE is not None:
-            using_proxy = True
-            proxy_url = next(PROXY_CYCLE)
-            proxies = {
-                "http": proxy_url,
-                "https": proxy_url,
-            }
-
         try:
-            resp = requests.get(url, headers=headers, proxies=proxies, timeout=timeout)
-        except requests.RequestException as e:  # сеть/коннект/таймаут
+            resp = requests.get(url, headers=headers, timeout=timeout)
+        except requests.RequestException as e:
             last_exc = e
-            # если это была первая (без прокси) или попытка с прокси — можно попробовать следующий
+            if REQUEST_RETRY_DELAY > 0:
+                time.sleep(REQUEST_RETRY_DELAY)
             continue
 
-        # если именно 503 или 403 — пробуем следующую попытку (другой прокси / без прокси уже был)
         if resp.status_code in (503, 403):
-            last_exc = requests.HTTPError(
-                f"{resp.status_code} from {url} (proxy={using_proxy})"
-            )
+            last_exc = requests.HTTPError(f"{resp.status_code} from {url}")
+            if REQUEST_RETRY_DELAY > 0:
+                time.sleep(REQUEST_RETRY_DELAY)
             continue
 
-        # для всех остальных кодов ошибки кидаем исключение сразу
         try:
             resp.raise_for_status()
         except requests.HTTPError as e:
@@ -288,7 +266,11 @@ def fetch_and_store_all(db: Session, snapshot_date: datetime.date) -> int:
     """
     inserted = 0
 
-    for cat_id, cat_name in NON_GAMING_CATEGORY_IDS.items():
+    for idx, (cat_id, cat_name) in enumerate(NON_GAMING_CATEGORY_IDS.items()):
+        # небольшая пауза между категориями, чтобы не долбить API слишком быстро
+        if idx > 0 and CATEGORY_DELAY_SECONDS > 0:
+            time.sleep(CATEGORY_DELAY_SECONDS)
+
         # пропускаем игрy (если что‑то такое попадётся)
         if "Game" in (cat_name or ""):
             continue
