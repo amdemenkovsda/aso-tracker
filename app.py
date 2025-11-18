@@ -33,7 +33,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session, relationship
 DB_URL = "sqlite:///./data.db"
 COUNTRY = "us"
 CHART_TYPE = "top-grossing"
-LIMIT = 100  # Уменьшено с 200 до 100 из-за таймаутов iTunes API
+LIMIT = 190  
 # токен для ручного обновления, можно переопределить через переменную окружения
 FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
@@ -76,7 +76,6 @@ NON_GAMING_CATEGORY_IDS: Dict[int, str] = {
 
 # список user-agent'ов, чтобы не светиться одним и тем же
 USER_AGENTS: List[str] = [
-    # можно добавить свои
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
@@ -375,6 +374,7 @@ def index(
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
     sort_by: Optional[str] = Query(None),
+    only_new: Optional[str] = Query(None),
     user: str = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -411,6 +411,7 @@ def index(
                 "from_date": None,
                 "to_date": None,
                 "sort_by": None,
+                "only_new": None,
             },
         )
 
@@ -538,6 +539,10 @@ def index(
             if r.get("delta") is not None and r["delta"] >= min_jump_int
         ]
 
+    # фильтр "только NEW"
+    if only_new == "true":
+        rows = [r for r in rows if r["status"] == "NEW"]
+
     # сортируем
     if sort_by == "new":
         # NEW приложения вверху, затем по дельте (большие скачки), затем по позиции
@@ -571,6 +576,7 @@ def index(
             "from_date": from_dt.isoformat() if from_dt else None,
             "to_date": to_dt.isoformat() if to_dt else None,
             "sort_by": sort_by,
+            "only_new": only_new,
         },
     )
 

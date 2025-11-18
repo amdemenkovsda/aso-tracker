@@ -32,6 +32,12 @@
             font-size: 12px;
         }
         .quick-filter:hover { background: #e8e8e8; }
+        .quick-filter.active { 
+            background: #0275d8; 
+            color: white; 
+            border-color: #0275d8; 
+        }
+        .quick-filter.active:hover { background: #025aa5; }
     </style>
 </head>
 <body>
@@ -101,6 +107,9 @@
 
 <div style="margin: 10px 0; font-size: 13px;">
     <strong>Quick filters:</strong>
+    <button type="button" class="quick-filter {% if only_new == 'true' %}active{% endif %}" onclick="toggleOnlyNew()">
+        {% if only_new == 'true' %}✓ {% endif %}Only NEW
+    </button>
     <button type="button" class="quick-filter" onclick="setMinJump(10)">Jump +10</button>
     <button type="button" class="quick-filter" onclick="setMinJump(20)">Jump +20</button>
     <button type="button" class="quick-filter" onclick="setMinJump(30)">Jump +30</button>
@@ -109,6 +118,16 @@
 </div>
 
 <script>
+function toggleOnlyNew() {
+    const url = new URL(window.location);
+    if (url.searchParams.get('only_new') === 'true') {
+        url.searchParams.delete('only_new');
+    } else {
+        url.searchParams.set('only_new', 'true');
+    }
+    window.location.href = url.toString();
+}
+
 function setMinJump(value) {
     const form = document.getElementById('filters-form');
     const input = form.querySelector('[name="min_jump"]');
