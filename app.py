@@ -30,10 +30,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session, relationship
 # Конфиг
 # --------------------------------------------------------------------
 
-DB_URL = "sqlite:///./data.db"
+# DB_URL = "sqlite:///./data.db"
+DB_URL = os.getenv("DATABASE_URL", "sqlite:///./data.db")
 COUNTRY = "us"
 CHART_TYPE = "top-grossing"
-LIMIT = 190  
+LIMIT = 100  
 # токен для ручного обновления, можно переопределить через переменную окружения
 FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
