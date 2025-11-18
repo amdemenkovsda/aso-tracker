@@ -202,7 +202,7 @@ def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
     - для остальных HTTP-ошибок выкидываем исключение сразу.
     """
     last_exc: Optional[Exception] = None
-    attempts = 3
+    attempts = max(1, REQUEST_MAX_ATTEMPTS)
 
     for attempt in range(attempts):
         headers = {
@@ -241,7 +241,8 @@ def fetch_category_rss(category_id: int) -> List[dict]:
     """
     url = (
         f"https://rss.itunes.apple.com/api/v1/"
-        f"{COUNTRY}/ios-apps/{CHART_TYPE}/{category_id}/{LIMIT}/explicit.json"
+        f"{COUNTRY}/ios-apps/{CHART_TYPE}/all/{LIMIT}/explicit.json"
+        f"?genre={category_id}"
     )
     resp = fetch_with_rotation(url, timeout=15)
     data = resp.json()
