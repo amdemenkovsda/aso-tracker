@@ -39,8 +39,12 @@ FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
 
 # задержки, чтобы не упираться в лимиты RSS
-REQUEST_RETRY_DELAY = float(os.getenv("REQUEST_RETRY_DELAY", "2"))  # пауза между ретраями одного запроса (сек)
+REQUEST_RETRY_DELAY = float(os.getenv("REQUEST_RETRY_DELAY", "2"))  # базовая пауза между ретраями одного запроса
+REQUEST_MAX_ATTEMPTS = int(os.getenv("REQUEST_MAX_ATTEMPTS", "6"))  # сколько раз пытаемся сходить за RSS
+REQUEST_BACKOFF_MULTIPLIER = float(os.getenv("REQUEST_BACKOFF_MULTIPLIER", "1.5"))  # как растёт задержка между попытками
+REQUEST_JITTER_SECONDS = float(os.getenv("REQUEST_JITTER_SECONDS", "0.5"))  # случайный шум к задержке, чтобы не бомбить по расписанию
 CATEGORY_DELAY_SECONDS = float(os.getenv("CATEGORY_DELAY_SECONDS", "1"))  # пауза между категориями (сек)
+RETRYABLE_STATUS_CODES = {403, 429, 500, 502, 503, 504}
 
 # учётка для админ-доступа (можно переопределить через переменные окружения)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "aso")
@@ -171,15 +175,30 @@ def get_current_user(credentials: HTTPBasicCredentials = Depends(security)) -> s
 # Вспомогательные функции
 # --------------------------------------------------------------------
 
+request_session = requests.Session()
+
+
+def _sleep_with_backoff(attempt: int) -> None:
+    """
+    Засыпаем с экспоненциальным ростом задержки и небольшим шумом,
+    чтобы немного растянуть поток запросов.
+    """
+    delay = REQUEST_RETRY_DELAY * (REQUEST_BACKOFF_MULTIPLIER**attempt)
+    if REQUEST_JITTER_SECONDS > 0:
+        delay += random.uniform(0, REQUEST_JITTER_SECONDS)
+    if delay > 0:
+        time.sleep(delay)
+
 
 def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
     """
     Делает GET-запрос с ротацией user-agent и ретраями без прокси.
 
     Логика:
-    - несколько попыток (по умолчанию 3);
+    - количество попыток и задержки настраиваются через env;
     - на каждой попытке случайный User-Agent;
-    - если сеть упала или получили 503/403 — подождать и попробовать ещё раз;
+    - если сеть упала или получили код из списка RETRYABLE_STATUS_CODES —
+      ждём с экспоненциальным ростом паузы и пробуем ещё раз;
     - для остальных HTTP-ошибок выкидываем исключение сразу.
     """
     last_exc: Optional[Exception] = None
@@ -192,17 +211,14 @@ def fetch_with_rotation(url: str, timeout: int = 15) -> requests.Response:
         }
 
         try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp = request_session.get(url, headers=headers, timeout=timeout)
         except requests.RequestException as e:
             last_exc = e
-            if REQUEST_RETRY_DELAY > 0:
-                time.sleep(REQUEST_RETRY_DELAY)
+            _sleep_with_backoff(attempt)
             continue
-
-        if resp.status_code in (503, 403):
+        if resp.status_code in RETRYABLE_STATUS_CODES:
             last_exc = requests.HTTPError(f"{resp.status_code} from {url}")
-            if REQUEST_RETRY_DELAY > 0:
-                time.sleep(REQUEST_RETRY_DELAY)
+            _sleep_with_backoff(attempt)
             continue
 
         try:
