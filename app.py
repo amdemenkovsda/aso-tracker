@@ -33,14 +33,14 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Session, relationship
 DB_URL = "sqlite:///./data.db"
 COUNTRY = "us"
 CHART_TYPE = "top-grossing"
-LIMIT = 200
+LIMIT = 100  # Уменьшено с 200 до 100 из-за таймаутов iTunes API
 # токен для ручного обновления, можно переопределить через переменную окружения
 FETCH_TOKEN = os.getenv("FETCH_TOKEN", "super_secret_token_change_me")
 FETCH_INTERVAL_SECONDS = 24 * 60 * 60  # автообновление раз в день
 
 # задержки, чтобы не упираться в лимиты RSS
-CATEGORY_DELAY_SECONDS = float(os.getenv("CATEGORY_DELAY_SECONDS", "1"))  # пауза между категориями (сек)
-RETRY_DELAYS = [1, 2, 4, 8, 10]
+CATEGORY_DELAY_SECONDS = float(os.getenv("CATEGORY_DELAY_SECONDS", "3"))  # пауза между категориями (сек)
+RETRY_DELAYS = [2, 4, 8, 16, 30]  # увеличены задержки для retry
 
 # учётка для админ-доступа (можно переопределить через переменные окружения)
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "aso")
@@ -214,27 +214,45 @@ def fetch_category_rss(category_id: int) -> List[dict]:
     """
     Забираем RSS топ‑гроссинга для конкретной категории.
     """
+    # Используем старый iTunes RSS формат, который еще работает
     url = (
-        f"https://rss.applemarketingtools.com/api/v2/"
-        f"{COUNTRY}/apps/{CHART_TYPE}/{LIMIT}/apps.json"
-        f"?genre={category_id}"
+        f"https://itunes.apple.com/{COUNTRY}/rss/topgrossingapplications/"
+        f"limit={LIMIT}/genre={category_id}/json"
     )
-    resp = fetch_with_rotation(url, timeout=15)
+    resp = fetch_with_rotation(url, timeout=60)
     data = resp.json()
-    results = data.get("feed", {}).get("results", [])
+    
+    # Старый iTunes RSS использует структуру feed.entry вместо feed.results
+    entries = data.get("feed", {}).get("entry", [])
     items: List[dict] = []
 
-    for idx, item in enumerate(results, start=1):
-        bundle_id = item.get("bundleId")
-        name = item.get("name")
-        store_url = item.get("url")
+    for idx, entry in enumerate(entries, start=1):
+        # Структура данных в старом API отличается
+        # Безопасное получение данных с учетом что некоторые поля могут быть None или списками
+        id_data = entry.get("id")
+        name_data = entry.get("im:name")
+        link_data = entry.get("link")
+        
+        bundle_id = None
+        if isinstance(id_data, dict):
+            bundle_id = id_data.get("attributes", {}).get("im:bundleId")
+        
+        name = None
+        if isinstance(name_data, dict):
+            name = name_data.get("label")
+        
+        store_url = None
+        if isinstance(link_data, dict):
+            store_url = link_data.get("attributes", {}).get("href")
+        if not store_url and isinstance(id_data, dict):
+            store_url = id_data.get("label")
 
         # попробуем взять имя категории из фида, если оно есть
         cat_name = NON_GAMING_CATEGORY_IDS.get(category_id) or ""
         if not cat_name:
-            genres = item.get("genres") or []
-            if genres:
-                cat_name = genres[0].get("name") or ""
+            category_data = entry.get("category", {})
+            if isinstance(category_data, dict):
+                cat_name = category_data.get("attributes", {}).get("label", "")
 
         items.append(
             {
